@@ -2,6 +2,13 @@ const { getNamedAccounts, ethers } = require("hardhat");
 const { getWeth, DEPOSIT_AMOUNT } = require("./getWeth");
 
 const wethTokenAddress = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
+const daiTokenAddress = "0x6B175474E89094C44Da98b954EedeAC495271d0F";
+const aggregatorV3InterfaceABI = require("@chainlink/contracts/abi/v0.8/AggregatorV3Interface.json");
+
+// only want to use 95% of our available collateral to borrow (depends on how much you want to use)
+// it's best to not use 100% of your collateral as you could get instantly liquidated due to market volatility
+// for more information about liquidation on Aave, read https://docs.aave.com/faq/liquidations#introduction
+const BORROW_PERCENTAGE = 0.95;
 
 const main = async () => {
     const { deployer } = await getNamedAccounts();
@@ -28,13 +35,22 @@ const main = async () => {
         ")."
     );
 
-    // borrow
     console.log("------------------------------------------");
     console.log("[BORROW_ASSETS]");
     console.log("Loading borrowing stats...");
     const { totalDebtETH, availableBorrowsETH } = await getBorrowUserData(deployer, lendingPool);
 
-    await getDaiPrice();
+    const daiPriceInEth = await getDaiPrice();
+
+    const amountDaiToBorrow =
+        (availableBorrowsETH.toString() * BORROW_PERCENTAGE) / daiPriceInEth.toString();
+
+    console.log(`Amount of DAI we want to borrow ${amountDaiToBorrow}`);
+
+    // we need the amount of DAI to borrow in wei to ...
+    const amountDaiToBorrowInWei = ethers.utils.parseEther(amountDaiToBorrow.toString()); // gives you 10**18
+
+    await borrowDai(lendingPool, daiTokenAddress, amountDaiToBorrowInWei, deployer);
 };
 
 const getLendingPool = async (account) => {
@@ -82,14 +98,25 @@ const getBorrowUserData = async (account, lendingPool) => {
 const getDaiPrice = async () => {
     // not going to provide a signer here as we're just reading data, don't need to sign txs
     const daiETHPriceFeed = await ethers.getContractAt(
-        "AggregatorV3Interface",
+        aggregatorV3InterfaceABI,
         "0x773616E4d11A78F511299002da57A0a94577F1f4"
     );
 
     const price = (await daiETHPriceFeed.latestRoundData())[1];
-    console.log(`The DAI/ETH price is ${price.toString()}`);
+    console.log(`The DAI/ETH price is ${ethers.utils.formatUnits(price)}`);
 
     return price;
+};
+
+const borrowDai = async (lendingPool, daiTokenAddress, amountToBorrow, account) => {
+    const borrowTx = await lendingPool.borrow(daiTokenAddress, amountToBorrow, 2, 0, account);
+    await borrowTx.wait(1);
+    console.log(`You've successfully borrowed ${ethers.utils.formatUnits(amountToBorrow)} DAI`);
+    console.log("------------------------------------------");
+
+    // get our updated Borrowing stats
+    console.log("Getting updated borrowing stats...");
+    await getBorrowUserData(account, lendingPool);
 };
 
 main()
