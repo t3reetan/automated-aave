@@ -4,6 +4,7 @@ const { getWeth, DEPOSIT_AMOUNT } = require("./getWeth");
 const wethTokenAddress = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
 const daiTokenAddress = "0x6B175474E89094C44Da98b954EedeAC495271d0F";
 const aggregatorV3InterfaceABI = require("@chainlink/contracts/abi/v0.8/AggregatorV3Interface.json");
+const { BigNumber } = require("ethers");
 
 // only want to use 95% of our available collateral to borrow (depends on how much you want to use)
 // it's best to not use 100% of your collateral as you could get instantly liquidated due to market volatility
@@ -45,12 +46,23 @@ const main = async () => {
     const amountDaiToBorrow =
         (availableBorrowsETH.toString() * BORROW_PERCENTAGE) / daiPriceInEth.toString();
 
-    console.log(`Amount of DAI we want to borrow ${amountDaiToBorrow}`);
+    console.log(
+        `Amount of DAI we want to borrow: ${amountDaiToBorrow} (${BORROW_PERCENTAGE * 100}%)`
+    );
 
     // we need the amount of DAI to borrow in wei to ...
     const amountDaiToBorrowInWei = ethers.utils.parseEther(amountDaiToBorrow.toString()); // gives you 10**18
 
     await borrowDai(lendingPool, daiTokenAddress, amountDaiToBorrowInWei, deployer);
+
+    console.log("------------------------------------------");
+    console.log("[REPAY_ASSETS]");
+    await repayLoan(
+        daiTokenAddress,
+        lendingPool,
+        amountDaiToBorrowInWei.div(BigNumber.from(2)), // repay half
+        deployer
+    );
 };
 
 const getLendingPool = async (account) => {
@@ -67,10 +79,10 @@ const getLendingPool = async (account) => {
     return lendingPool;
 };
 
-const approveERC20 = async (erc20Address, spenderAddress, amtToSpend, account) => {
+const approveERC20 = async (erc20Address, spenderAddress, amountToSpend, account) => {
     const erc20Token = await ethers.getContractAt("IERC20", erc20Address, account);
     console.log("Approving lending pool to use balance from account...");
-    const tx = await erc20Token.approve(spenderAddress, amtToSpend);
+    const tx = await erc20Token.approve(spenderAddress, amountToSpend);
     await tx.wait(1);
     console.log("Approved.");
 };
@@ -115,7 +127,19 @@ const borrowDai = async (lendingPool, daiTokenAddress, amountToBorrow, account) 
     console.log("------------------------------------------");
 
     // get our updated Borrowing stats
-    console.log("Getting updated borrowing stats...");
+    console.log("Getting updated borrowing stats after borrowing...");
+    await getBorrowUserData(account, lendingPool);
+};
+
+const repayLoan = async (daiTokenAddress, lendingPool, amountToRepay, account) => {
+    await approveERC20(daiTokenAddress, lendingPool.address, amountToRepay, account);
+    const repayTx = await lendingPool.repay(daiTokenAddress, amountToRepay, 2, account);
+    await repayTx.wait(1);
+    console.log(`You've repaid ${ethers.utils.formatUnits(amountToRepay)} DAI`);
+    console.log("------------------------------------------");
+
+    // get our updated Borrowing stats
+    console.log("Getting updated borrowing stats after repaying...");
     await getBorrowUserData(account, lendingPool);
 };
 
